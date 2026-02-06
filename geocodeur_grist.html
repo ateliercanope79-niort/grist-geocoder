@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Géocodeur Grist</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      padding: 20px;
+      background: #f8f9fa;
+      margin: 0;
+    }
+    .container {
+      background: white;
+      padding: 24px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h2 {
+      color: #16B378;
+      margin-top: 0;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    p {
+      color: #666;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    button {
+      background: #16B378;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+      margin: 8px 8px 8px 0;
+      transition: background 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    button:hover {
+      background: #13a06a;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .status {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      display: none;
+    }
+    .status.show {
+      display: block;
+    }
+    .success { 
+      background: #d4edda; 
+      color: #155724;
+      border-left: 4px solid #28a745;
+    }
+    .error { 
+      background: #f8d7da; 
+      color: #721c24;
+      border-left: 4px solid #dc3545;
+    }
+    .info { 
+      background: #d1ecf1; 
+      color: #0c5460;
+      border-left: 4px solid #17a2b8;
+    }
+    .progress {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #666;
+      font-weight: 500;
+    }
+    .config-section {
+      background: #f8f9fa;
+      padding: 16px;
+      border-radius: 6px;
+      margin: 16px 0;
+      border: 1px solid #dee2e6;
+    }
+    .config-section label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #495057;
+      margin-bottom: 6px;
+    }
+    .config-section input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    .config-section small {
+      display: block;
+      margin-top: 4px;
+      color: #6c757d;
+      font-size: 12px;
+    }
+    .stats {
+      display: flex;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .stat-box {
+      flex: 1;
+      background: #f8f9fa;
+      padding: 12px;
+      border-radius: 6px;
+      text-align: center;
+    }
+    .stat-number {
+      font-size: 24px;
+      font-weight: 700;
+      color: #16B378;
+    }
+    .stat-label {
+      font-size: 12px;
+      color: #6c757d;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>
+      <span>🗺️</span>
+      Géocodeur Automatique
+    </h2>
+    <p>Calcule automatiquement la latitude et longitude à partir des adresses de vos partenaires.</p>
+    
+    <div class="config-section">
+      <label for="tableName">Nom de votre table Grist :</label>
+      <input type="text" id="tableName" value="partenaires_grist_v2" placeholder="Ex: partenaires_grist_v2">
+      <small>💡 Vérifiez le nom exact de votre table dans Grist</small>
+    </div>
+
+    <div class="stats" id="statsDiv" style="display: none;">
+      <div class="stat-box">
+        <div class="stat-number" id="totalCount">0</div>
+        <div class="stat-label">Total d'adresses</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-number" id="geocodedCount">0</div>
+        <div class="stat-label">Déjà géocodées</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-number" id="toGeocodeCount">0</div>
+        <div class="stat-label">À géocoder</div>
+      </div>
+    </div>
+    
+    <div style="margin-top: 20px;">
+      <button id="geocodeBtn" onclick="geocodeAll()">
+        <span>🚀</span> Géocoder toutes les adresses
+      </button>
+      
+      <button id="geocodeSelectedBtn" onclick="geocodeSelected()">
+        <span>📍</span> Géocoder la ligne sélectionnée
+      </button>
+
+      <button onclick="checkStatus()" style="background: #6c757d;">
+        <span>🔍</span> Vérifier le statut
+      </button>
+    </div>
+    
+    <div id="status" class="status"></div>
+    <div id="progress"></div>
+  </div>
+
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <script>
+
+    let gristReady = false;
+    let currentTableName = 'partenaires_grist_v2';
+
+    // Mise à jour du nom de table
+    document.getElementById('tableName').addEventListener('change', function(e) {
+      currentTableName = e.target.value.trim();
+      showStatus('✅ Nom de table mis à jour: ' + currentTableName, 'success');
+    });
+
+    // Initialisation de Grist
+    grist.ready({
+      requiredAccess: 'full',
+      columns: [
+        { name: 'Adresse', optional: false },
+        { name: 'Code_Postal', optional: false },
+        { name: 'Ville', optional: false },
+        { name: 'Pays', optional: false },
+        { name: 'Latitude', optional: false },
+        { name: 'Longitude', optional: false }
+      ]
+    });
+
+    grist.onReady(function() {
+      gristReady = true;
+      showStatus('✅ Géocodeur connecté et prêt !', 'success');
+      checkStatus();
+    });
+
+    function showStatus(message, type = 'info') {
+      const statusDiv = document.getElementById('status');
+      statusDiv.className = 'status show ' + type;
+      statusDiv.innerHTML = message;
+    }
+
+    function showProgress(message) {
+      const progressDiv = document.getElementById('progress');
+      if (message) {
+        progressDiv.innerHTML = '<div class="progress">' + message + '</div>';
+      } else {
+        progressDiv.innerHTML = '';
+      }
+    }
+
+    // Vérifier le statut des adresses
+    async function checkStatus() {
+      if (!gristReady) {
+        showStatus('⏳ Widget en cours de chargement...', 'info');
+        return;
+      }
+
+      try {
+        const records = await grist.docApi.fetchTable(currentTableName);
+        const total = records.id.length;
+        let geocoded = 0;
+
+        for (let i = 0; i < total; i++) {
+          if (records.Latitude[i] && records.Longitude[i]) {
+            geocoded++;
+          }
+        }
+
+        document.getElementById('totalCount').textContent = total;
+        document.getElementById('geocodedCount').textContent = geocoded;
+        document.getElementById('toGeocodeCount').textContent = total - geocoded;
+        document.getElementById('statsDiv').style.display = 'flex';
+
+        showStatus(`📊 ${geocoded} adresses géocodées sur ${total} au total`, 'info');
+      } catch (error) {
+        showStatus('❌ Erreur : Vérifiez le nom de votre table. ' + error.message, 'error');
+      }
+    }
+
+    // Fonction de géocodage avec l'API française
+    async function geocodeAddress(adresse, codePostal, ville, pays) {
+      if (!adresse || !ville) {
+        return { latitude: null, longitude: null, statut: '⚠️ Adresse incomplète' };
+      }
+
+      const query = `${adresse}, ${codePostal || ''} ${ville}, ${pays || 'France'}`;
+      const url = `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(query)}&limit=1`;
+      
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.features && data.features.length > 0) {
+          const coords = data.features[0].geometry.coordinates;
+          const score = data.features[0].properties.score;
+          return {
+            latitude: coords[1],
+            longitude: coords[0],
+            statut: `✅ Géocodé (${(score * 100).toFixed(0)}%)`
+          };
+        }
+        return { latitude: null, longitude: null, statut: '❌ Adresse non trouvée' };
+      } catch (error) {
+        console.error('Erreur géocodage:', error);
+        return { latitude: null, longitude: null, statut: '⚠️ Erreur API' };
+      }
+    }
+
+    // Géocoder toutes les lignes sans coordonnées
+    async function geocodeAll() {
+      if (!gristReady) {
+        showStatus('⏳ Widget en cours de chargement...', 'info');
+        return;
+      }
+
+      if (!confirm('Voulez-vous géocoder toutes les adresses sans coordonnées ?\n\nCela peut prendre quelques minutes selon le nombre d\'adresses.')) {
+        return;
+      }
+
+      document.getElementById('geocodeBtn').disabled = true;
+      document.getElementById('geocodeSelectedBtn').disabled = true;
+      showStatus('🔄 Géocodage en cours...', 'info');
+      
+      try {
+        const records = await grist.docApi.fetchTable(currentTableName);
+        
+        let processed = 0;
+        let geocoded = 0;
+        let skipped = 0;
+        let errors = 0;
+        const total = records.id.length;
+
+        for (let i = 0; i < total; i++) {
+          const rowId = records.id[i];
+          const adresse = records.Adresse[i];
+          const codePostal = records.Code_Postal[i];
+          const ville = records.Ville[i];
+          const pays = records.Pays[i];
+          const latitude = records.Latitude[i];
+          const longitude = records.Longitude[i];
+
+          // Ne géocoder que si pas de coordonnées
+          if (!latitude || !longitude) {
+            showProgress(`📍 Géocodage ${processed + 1}/${total} : ${ville || 'Ville inconnue'}...`);
+            
+            const result = await geocodeAddress(adresse, codePostal, ville, pays);
+            
+            if (result.latitude && result.longitude) {
+              await grist.docApi.applyUserActions([
+                ['UpdateRecord', currentTableName, rowId, {
+                  Latitude: result.latitude,
+                  Longitude: result.longitude
+                }]
+              ]);
+              geocoded++;
+            } else {
+              errors++;
+            }
+            
+            // Délai pour respecter les limites de l'API (max 10 req/s)
+            await new Promise(resolve => setTimeout(resolve, 150));
+          } else {
+            skipped++;
+          }
+          
+          processed++;
+        }
+
+        showProgress('');
+        showStatus(`✅ Terminé !<br>
+          • ${geocoded} adresses géocodées avec succès<br>
+          • ${skipped} déjà géocodées (ignorées)<br>
+          • ${errors} erreurs`, 'success');
+        
+        checkStatus();
+        
+      } catch (error) {
+        console.error('Erreur:', error);
+        showStatus('❌ Erreur : ' + error.message, 'error');
+      }
+      
+      document.getElementById('geocodeBtn').disabled = false;
+      document.getElementById('geocodeSelectedBtn').disabled = false;
+    }
+
+    // Géocoder uniquement la ligne sélectionnée
+    async function geocodeSelected() {
+      if (!gristReady) {
+        showStatus('⏳ Widget en cours de chargement...', 'info');
+        return;
+      }
+
+      document.getElementById('geocodeSelectedBtn').disabled = true;
+      document.getElementById('geocodeBtn').disabled = true;
+      showStatus('🔄 Géocodage de la ligne sélectionnée...', 'info');
+      
+      try {
+        const selectedRow = await grist.selectedTable.getRowId();
+        
+        if (!selectedRow) {
+          showStatus('⚠️ Veuillez sélectionner une ligne dans votre table', 'error');
+          document.getElementById('geocodeSelectedBtn').disabled = false;
+          document.getElementById('geocodeBtn').disabled = false;
+          return;
+        }
+
+        const record = await grist.docApi.fetchTable(currentTableName);
+        const index = record.id.indexOf(selectedRow);
+        
+        if (index === -1) {
+          showStatus('❌ Ligne non trouvée dans la table', 'error');
+          document.getElementById('geocodeSelectedBtn').disabled = false;
+          document.getElementById('geocodeBtn').disabled = false;
+          return;
+        }
+
+        const adresse = record.Adresse[index];
+        const codePostal = record.Code_Postal[index];
+        const ville = record.Ville[index];
+        const pays = record.Pays[index];
+
+        showProgress(`📍 Géocodage de : ${adresse}, ${ville}...`);
+
+        const result = await geocodeAddress(adresse, codePostal, ville, pays);
+        
+        if (result.latitude && result.longitude) {
+          await grist.docApi.applyUserActions([
+            ['UpdateRecord', currentTableName, selectedRow, {
+              Latitude: result.latitude,
+              Longitude: result.longitude
+            }]
+          ]);
+          showProgress('');
+          showStatus(`✅ Adresse géocodée avec succès !<br>
+            📍 ${ville}<br>
+            🌍 Lat: ${result.latitude.toFixed(6)}, Lon: ${result.longitude.toFixed(6)}`, 'success');
+          checkStatus();
+        } else {
+          showProgress('');
+          showStatus(result.statut + '<br>💡 Vérifiez que l\'adresse est correcte', 'error');
+        }
+        
+      } catch (error) {
+        console.error('Erreur:', error);
+        showProgress('');
+        showStatus('❌ Erreur : ' + error.message, 'error');
+      }
+      
+      document.getElementById('geocodeSelectedBtn').disabled = false;
+      document.getElementById('geocodeBtn').disabled = false;
+    }
+
+  </script>
+</body>
+</html>
